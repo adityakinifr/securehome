@@ -10,7 +10,8 @@ import threading
 from rich.console import Console
 from rich.table import Table
 
-from securehome.adapters.sdm import SDMAdapter
+from securehome.adapters.base import DeviceAdapter
+from securehome.config import settings
 from securehome.services.event_listener import start_listener
 from securehome.services.event_store import event_store
 from securehome.services.night_check import run_night_check
@@ -18,6 +19,7 @@ from securehome.services.scheduler import start_scheduler
 from securehome.services.visitor_summary import generate_visitor_summary
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -29,15 +31,48 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
+def _build_adapters(adapter_names: list[str] | None = None) -> list[DeviceAdapter]:
+    """Instantiate the adapters specified in config (or override with adapter_names)."""
+    names = adapter_names or [a.strip() for a in settings.adapters.split(",") if a.strip()]
+    adapters: list[DeviceAdapter] = []
+
+    for name in names:
+        try:
+            if name == "sdm":
+                from securehome.adapters.sdm import SDMAdapter
+                adapters.append(SDMAdapter())
+            elif name == "schlage":
+                from securehome.adapters.schlage import SchlageAdapter
+                adapters.append(SchlageAdapter())
+            elif name == "kasa":
+                from securehome.adapters.kasa import KasaAdapter
+                target = settings.kasa_target or None
+                adapters.append(KasaAdapter(target=target))
+            else:
+                logger.warning("Unknown adapter: %s", name)
+        except Exception:
+            logger.exception("Failed to initialize %s adapter", name)
+
+    if not adapters:
+        console.print("[yellow]Warning: no adapters loaded. Check ADAPTERS in .env[/]")
+
+    return adapters
+
+
 # ---------- Sub-commands ----------
 
 
 def cmd_devices(args: argparse.Namespace) -> None:
     """List all devices and their current state."""
-    adapter = SDMAdapter()
-    devices = adapter.list_devices()
+    adapters = _build_adapters()
+    all_devices = []
+    for adapter in adapters:
+        try:
+            all_devices.extend(adapter.list_devices())
+        except Exception:
+            logger.exception("Failed to list devices from %s", type(adapter).__name__)
 
-    table = Table(title="Devices")
+    table = Table(title=f"Devices ({len(all_devices)} total)")
     table.add_column("Name", style="cyan")
     table.add_column("Type")
     table.add_column("Room")
@@ -45,7 +80,7 @@ def cmd_devices(args: argparse.Namespace) -> None:
     table.add_column("Lock")
     table.add_column("Door")
 
-    for dev in devices:
+    for dev in all_devices:
         table.add_row(
             dev.name,
             dev.device_type.value,
@@ -60,8 +95,8 @@ def cmd_devices(args: argparse.Namespace) -> None:
 
 def cmd_night_check(args: argparse.Namespace) -> None:
     """Run the night security check right now."""
-    adapter = SDMAdapter()
-    result = run_night_check([adapter])
+    adapters = _build_adapters()
+    result = run_night_check(adapters)
 
     if result.all_secure:
         console.print("[bold green]All secure![/] Every lock is locked and every door is closed.")
@@ -72,10 +107,12 @@ def cmd_night_check(args: argparse.Namespace) -> None:
         for door in result.open_doors:
             console.print(f"  [red]Open door:[/] {door.name} ({door.room})")
 
-    if args.lock:
-        for lock in result.unlocked_locks:
-            console.print(f"  Locking {lock.name}...")
-            adapter.lock(lock.id)
+    if args.lock and result.unlocked_locks:
+        console.print("\n[bold]Auto-locking...[/]")
+        for adapter in adapters:
+            for lock in result.unlocked_locks:
+                if adapter.lock(lock.id):
+                    console.print(f"  [green]Locked[/] {lock.name}")
 
 
 def cmd_summary(args: argparse.Namespace) -> None:
@@ -100,16 +137,87 @@ def cmd_summary(args: argparse.Namespace) -> None:
             )
 
 
+def cmd_lock_history(args: argparse.Namespace) -> None:
+    """Show access history for Schlage locks."""
+    adapters = _build_adapters(["schlage"])
+    if not adapters:
+        console.print("[red]Schlage adapter not available. Check credentials.[/]")
+        return
+
+    from securehome.adapters.schlage import SchlageAdapter
+    for adapter in adapters:
+        if isinstance(adapter, SchlageAdapter):
+            devices = adapter.list_devices()
+            for dev in devices:
+                console.print(f"\n[bold cyan]{dev.name}[/] ({dev.lock_state.value})")
+                logs = adapter.get_access_logs(dev.id)
+                if not logs:
+                    console.print("  No access logs available")
+                    continue
+                for entry in logs[:20]:  # Show last 20 entries
+                    console.print(f"  {entry}")
+
+
+def cmd_kasa(args: argparse.Namespace) -> None:
+    """Kasa device control sub-commands."""
+    adapters = _build_adapters(["kasa"])
+    if not adapters:
+        console.print("[red]Kasa adapter not available. Check KASA_USERNAME/KASA_PASSWORD.[/]")
+        return
+
+    from securehome.adapters.kasa import KasaAdapter
+    kasa: KasaAdapter = adapters[0]
+
+    if args.kasa_action == "list":
+        devices = kasa.list_devices()
+        table = Table(title="Kasa Devices")
+        table.add_column("IP / ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("On", justify="center")
+        table.add_column("Model")
+
+        for dev in devices:
+            table.add_row(
+                dev.id,
+                dev.name,
+                dev.device_type.value,
+                "[green]Yes[/]" if dev.raw_traits.get("is_on") else "[red]No[/]",
+                dev.raw_traits.get("model", ""),
+            )
+        console.print(table)
+
+    elif args.kasa_action == "on":
+        if kasa.turn_on(args.device):
+            console.print(f"[green]Turned on[/] {args.device}")
+        else:
+            console.print(f"[red]Failed to turn on[/] {args.device}")
+
+    elif args.kasa_action == "off":
+        if kasa.turn_off(args.device):
+            console.print(f"[green]Turned off[/] {args.device}")
+        else:
+            console.print(f"[red]Failed to turn off[/] {args.device}")
+
+    elif args.kasa_action == "energy":
+        usage = kasa.get_energy_usage(args.device)
+        if usage:
+            console.print(f"[bold]Energy usage for {args.device}:[/]")
+            for key, val in usage.items():
+                console.print(f"  {key}: {val}")
+        else:
+            console.print(f"[yellow]No energy data available for {args.device}[/]")
+
+
 def cmd_watch(args: argparse.Namespace) -> None:
     """Run the daemon: scheduler + Pub/Sub event listener."""
-    adapter = SDMAdapter()
+    adapters = _build_adapters()
     console.print("[bold]Starting SecureHome daemon...[/]")
+    console.print(f"  Active adapters: {', '.join(type(a).__name__ for a in adapters)}")
 
-    # Start scheduler
-    start_scheduler([adapter])
+    start_scheduler(adapters)
     console.print("  Scheduler started (night check + visitor summary)")
 
-    # Start Pub/Sub listener in a background thread
     listener_thread = threading.Thread(target=start_listener, daemon=True, name="pubsub-listener")
     listener_thread.start()
     console.print("  Pub/Sub event listener started")
@@ -133,7 +241,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     # devices
-    sub.add_parser("devices", help="List all devices")
+    sub.add_parser("devices", help="List all devices from all adapters")
 
     # night-check
     nc = sub.add_parser("night-check", help="Run a security check on locks and doors")
@@ -141,6 +249,20 @@ def main() -> None:
 
     # summary
     sub.add_parser("summary", help="Print today's visitor summary")
+
+    # lock-history
+    sub.add_parser("lock-history", help="Show Schlage lock access history")
+
+    # kasa
+    kasa_parser = sub.add_parser("kasa", help="Control Kasa/Tapo devices")
+    kasa_sub = kasa_parser.add_subparsers(dest="kasa_action")
+    kasa_sub.add_parser("list", help="Discover and list Kasa devices")
+    kasa_on = kasa_sub.add_parser("on", help="Turn on a device")
+    kasa_on.add_argument("device", help="Device IP or name")
+    kasa_off = kasa_sub.add_parser("off", help="Turn off a device")
+    kasa_off.add_argument("device", help="Device IP or name")
+    kasa_energy = kasa_sub.add_parser("energy", help="Show energy usage")
+    kasa_energy.add_argument("device", help="Device IP or name")
 
     # watch
     sub.add_parser("watch", help="Run the daemon (scheduler + event listener)")
@@ -152,6 +274,8 @@ def main() -> None:
         "devices": cmd_devices,
         "night-check": cmd_night_check,
         "summary": cmd_summary,
+        "lock-history": cmd_lock_history,
+        "kasa": cmd_kasa,
         "watch": cmd_watch,
     }
 

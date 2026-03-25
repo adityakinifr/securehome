@@ -24,6 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+schlage = ["pyschlage>=2024.1.0"]
+kasa = ["python-kasa>=0.7.0"]
+all = ["pyschlage>=2024.1.0", "python-kasa>=0.7.0"]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",

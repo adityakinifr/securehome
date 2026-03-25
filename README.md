@@ -1,56 +1,95 @@
 # SecureHome
 
-A Google Home security monitoring app that connects to your Nest devices via the Smart Device Management (SDM) API.
+A smart home security monitoring app with multi-platform support — Google Nest (SDM API), Schlage locks, and TP-Link Kasa/Tapo devices.
 
 ## Features
 
 - **Night Check** — Scans all locks and doors at a scheduled time and alerts you if anything is unlocked or open
 - **Visitor Summary** — End-of-day report aggregating person-detection and doorbell events from your cameras
-- **Device Dashboard** — List all devices and their current states
-- **Real-time Events** — Listens to Google Cloud Pub/Sub for camera/doorbell notifications (person detected, doorbell pressed, motion, sound)
+- **Device Dashboard** — List all devices across all platforms in one view
+- **Real-time Events** — Listens to Google Cloud Pub/Sub for camera/doorbell notifications
+- **Schlage Lock Control** — Lock/unlock, status checks, and access history via pyschlage
+- **Kasa Device Control** — On/off, brightness, energy monitoring for TP-Link Kasa/Tapo devices
+
+## Supported Platforms
+
+| Platform | Devices | Library |
+|---|---|---|
+| **Google Nest** (SDM API) | Cameras, doorbells, thermostats | google-api-python-client |
+| **Schlage** | Encode smart locks | pyschlage |
+| **TP-Link Kasa/Tapo** | Plugs, switches, bulbs, light strips, cameras | python-kasa |
 
 ## Setup
 
-### 1. Google Cloud & Device Access
+### 1. Install
 
-1. Create a [Google Cloud project](https://console.cloud.google.com/) and enable the **Smart Device Management API**
-2. Register a [Device Access project](https://console.nest.google.com/device-access) (one-time $5 fee)
-3. Create OAuth 2.0 credentials (Desktop app type) in the Google Cloud Console
-4. Set up a [Cloud Pub/Sub](https://console.cloud.google.com/cloudpubsub) subscription for SDM events
+```bash
+# Core (Nest only)
+pip install -e .
+
+# With Schlage support
+pip install -e ".[schlage]"
+
+# With Kasa support
+pip install -e ".[kasa]"
+
+# Everything
+pip install -e ".[all]"
+```
 
 ### 2. Configure
 
 ```bash
 cp .env.example .env
-# Edit .env with your credentials and project IDs
+# Edit .env with your credentials
 ```
 
-### 3. Install
+Key settings in `.env`:
 
 ```bash
-pip install -e .
+# Which adapters to enable (comma-separated)
+ADAPTERS=sdm,schlage,kasa
+
+# Schlage credentials (Schlage Home app login)
+SCHLAGE_USERNAME=you@email.com
+SCHLAGE_PASSWORD=your-password
+
+# Kasa credentials (TP-Link app login, needed for newer devices)
+KASA_USERNAME=you@email.com
+KASA_PASSWORD=your-password
+KASA_TARGET=192.168.1.0/24  # optional: network to scan
 ```
 
-### 4. Authenticate
+### 3. Google Nest Setup (optional)
 
-The first time you run any command, a browser window will open for Google OAuth consent.
+1. Create a Google Cloud project and enable the **Smart Device Management API**
+2. Register a Device Access project at console.nest.google.com (one-time $5 fee)
+3. Create OAuth 2.0 credentials (Desktop app type)
+4. Set up Cloud Pub/Sub for camera events
 
 ## Usage
 
 ```bash
-# List all devices
+# List all devices across all platforms
 securehome devices
 
-# Run a night security check now
+# Night security check
 securehome night-check
+securehome night-check --lock    # auto-lock unlocked Schlage locks
 
-# Auto-lock any unlocked locks during night check
-securehome night-check --lock
-
-# Print today's visitor summary
+# Visitor summary (camera person-detection events)
 securehome summary
 
-# Run the daemon (scheduled checks + real-time event listener)
+# Schlage lock access history
+securehome lock-history
+
+# Kasa device control
+securehome kasa list             # discover devices on network
+securehome kasa on 192.168.1.10  # turn on a device
+securehome kasa off 192.168.1.10
+securehome kasa energy 192.168.1.10  # energy monitoring
+
+# Run the daemon (scheduled checks + real-time events)
 securehome watch
 ```
 
@@ -58,25 +97,23 @@ securehome watch
 
 ```
 securehome/
-├── adapters/          # Pluggable device backends
-│   ├── base.py        # Abstract DeviceAdapter interface
-│   └── sdm.py         # Google SDM API (Nest devices)
+├── adapters/             # Pluggable device backends
+│   ├── base.py           # Abstract DeviceAdapter interface
+│   ├── sdm.py            # Google SDM API (Nest devices)
+│   ├── schlage.py         # Schlage Encode locks (pyschlage)
+│   └── kasa.py           # TP-Link Kasa/Tapo (python-kasa)
 ├── services/
 │   ├── night_check.py     # Lock/door security scanner
 │   ├── visitor_summary.py # End-of-day event aggregation
 │   ├── event_store.py     # In-memory camera event storage
 │   ├── event_listener.py  # Pub/Sub real-time event receiver
 │   └── scheduler.py       # Timed task runner
-├── auth.py            # OAuth 2.0 flow
-├── config.py          # Settings from .env
-├── models.py          # Pydantic domain models
-└── cli.py             # CLI entry point
+├── auth.py                # Google OAuth 2.0 flow
+├── config.py              # Settings from .env
+├── models.py              # Pydantic domain models
+└── cli.py                 # CLI entry point
 ```
 
 ### Adding new device backends
 
-Implement `securehome.adapters.base.DeviceAdapter` for any smart home platform (SmartThings, Home Assistant, August, etc.) and pass it alongside the SDM adapter.
-
-## Limitations
-
-The SDM API only covers **Nest-branded devices** (cameras, doorbells, thermostats). Third-party locks, sensors, and doors added to Google Home are not accessible through this API. The adapter pattern allows you to add manufacturer-specific APIs for those devices.
+Implement `securehome.adapters.base.DeviceAdapter` and add it to the `_build_adapters()` factory in `cli.py`.

@@ -21,6 +21,18 @@ class Settings(BaseSettings):
     summary_hour: int = 21
     summary_minute: int = 0
 
+    # Schlage
+    schlage_username: str = ""
+    schlage_password: str = ""
+
+    # Kasa / Tapo
+    kasa_username: str = ""
+    kasa_password: str = ""
+    kasa_target: str = ""
+
+    # Adapters to enable (comma-separated: sdm,schlage,kasa)
+    adapters: str = "sdm"
+
     # Paths
     token_path: str = "config/token.json"
 
