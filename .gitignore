@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.env
+config/token.json
+config/credentials.json
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
