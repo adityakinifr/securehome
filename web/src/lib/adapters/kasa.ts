@@ -11,17 +11,12 @@ import type { DeviceAdapter } from "./types";
 
 const CLOUD_URL = "https://wap.tplinkcloud.com";
 
-let cachedToken: { token: string; expiresAt: number } | null = null;
+const kasaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 
-async function authenticate(): Promise<string> {
-  if (cachedToken && Date.now() / 1000 < cachedToken.expiresAt - 60) {
-    return cachedToken.token;
-  }
-
-  const username = process.env.KASA_USERNAME;
-  const password = process.env.KASA_PASSWORD;
-  if (!username || !password) {
-    throw new Error("KASA_USERNAME and KASA_PASSWORD are required");
+async function authenticate(username: string, password: string): Promise<string> {
+  const cached = kasaTokenCache.get(username);
+  if (cached && Date.now() / 1000 < cached.expiresAt - 60) {
+    return cached.token;
   }
 
   const res = await fetch(CLOUD_URL, {
@@ -43,15 +38,15 @@ async function authenticate(): Promise<string> {
     throw new Error(`Kasa auth failed: ${JSON.stringify(data)}`);
   }
 
-  cachedToken = {
+  kasaTokenCache.set(username, {
     token: data.result.token,
-    expiresAt: Math.floor(Date.now() / 1000) + 86400, // ~24h
-  };
-  return cachedToken.token;
+    expiresAt: Math.floor(Date.now() / 1000) + 86400,
+  });
+  return data.result.token;
 }
 
-async function cloudRequest(method: string, params: any = {}): Promise<any> {
-  const token = await authenticate();
+async function cloudRequest(method: string, params: any, username: string, password: string): Promise<any> {
+  const token = await authenticate(username, password);
   const res = await fetch(`${CLOUD_URL}?token=${token}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -67,9 +62,11 @@ async function cloudRequest(method: string, params: any = {}): Promise<any> {
 async function passthrough(
   deviceId: string,
   appServerUrl: string,
-  command: any
+  command: any,
+  username: string,
+  password: string
 ): Promise<any> {
-  const token = await authenticate();
+  const token = await authenticate(username, password);
   const res = await fetch(`${appServerUrl}?token=${token}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -129,9 +126,16 @@ function parseDevice(raw: KasaCloudDevice): Device {
 
 export class KasaAdapter implements DeviceAdapter {
   name = "KasaAdapter";
+  private username: string;
+  private password: string;
+
+  constructor(username?: string, password?: string) {
+    this.username = username || process.env.KASA_USERNAME || "";
+    this.password = password || process.env.KASA_PASSWORD || "";
+  }
 
   async listDevices(): Promise<Device[]> {
-    const result = await cloudRequest("getDeviceList");
+    const result = await cloudRequest("getDeviceList", {}, this.username, this.password);
     const devices: KasaCloudDevice[] = result.deviceList ?? [];
 
     deviceCache = new Map();
@@ -162,7 +166,7 @@ export class KasaAdapter implements DeviceAdapter {
     try {
       await passthrough(deviceId, dev.appServerUrl, {
         system: { set_relay_state: { state: 1 } },
-      });
+      }, this.username, this.password);
       return true;
     } catch {
       return false;
@@ -175,7 +179,7 @@ export class KasaAdapter implements DeviceAdapter {
     try {
       await passthrough(deviceId, dev.appServerUrl, {
         system: { set_relay_state: { state: 0 } },
-      });
+      }, this.username, this.password);
       return true;
     } catch {
       return false;
@@ -190,7 +194,7 @@ export class KasaAdapter implements DeviceAdapter {
     try {
       const data = await passthrough(deviceId, dev.appServerUrl, {
         emeter: { get_realtime: {} },
-      });
+      }, this.username, this.password);
       return data?.emeter?.get_realtime ?? null;
     } catch {
       return null;

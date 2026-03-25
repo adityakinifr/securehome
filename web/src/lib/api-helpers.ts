@@ -1,16 +1,28 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { buildAdapters } from "./adapters";
+import { getUserSettings } from "./db/user-settings";
 import type { DeviceAdapter } from "./adapters/types";
 
 /**
  * Get authenticated adapters for an API route.
- * Extracts the SDM access token from the NextAuth session.
+ * Loads per-user settings from the database and builds adapters accordingly.
  */
 export async function getAdapters(): Promise<DeviceAdapter[]> {
   const session = await auth();
   const sdmToken = session?.accessToken;
-  return buildAdapters(sdmToken);
+  const userId = session?.user?.id || session?.user?.email || "";
+
+  let userSettings = null;
+  if (userId) {
+    try {
+      userSettings = await getUserSettings(userId);
+    } catch {
+      // DB not available — fall back to env vars
+    }
+  }
+
+  return buildAdapters(sdmToken, userSettings);
 }
 
 export function json(data: unknown, status = 200) {

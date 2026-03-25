@@ -48,9 +48,9 @@ export class SDMAdapter implements DeviceAdapter {
   private baseUrl: string;
   private accessToken: string;
 
-  constructor(accessToken: string) {
-    const projectId = process.env.SDM_PROJECT_ID ?? "";
-    this.baseUrl = `https://smartdevicemanagement.googleapis.com/v1/enterprises/${projectId}`;
+  constructor(accessToken: string, projectId?: string) {
+    const pid = projectId ?? process.env.SDM_PROJECT_ID ?? "";
+    this.baseUrl = `https://smartdevicemanagement.googleapis.com/v1/enterprises/${pid}`;
     this.accessToken = accessToken;
   }
 

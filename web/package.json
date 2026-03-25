@@ -9,11 +9,14 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@vercel/kv": "^2.0.0",
+    "@vercel/postgres": "^0.10.0",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.1",
     "next": "^15.3.0",
     "next-auth": "^5.0.0-beta.25",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@vercel/kv": "^2.0.0",
     "swr": "^2.2.0"
   },
   "devDependencies": {

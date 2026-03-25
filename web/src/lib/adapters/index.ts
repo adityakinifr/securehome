@@ -1,38 +1,56 @@
 import type { DeviceAdapter } from "./types";
+import type { UserSettings } from "../db/schema";
 import { SDMAdapter } from "./sdm";
 import { SchlageAdapter } from "./schlage";
 import { KasaAdapter } from "./kasa";
 
 /**
- * Build the list of active adapters.
- * SDM requires a per-user access token (from NextAuth session).
- * Schlage and Kasa use server-side env var credentials.
+ * Build adapters from per-user settings stored in the database.
+ * Falls back to env vars if no user settings exist (backwards compatible).
  */
-export function buildAdapters(sdmAccessToken?: string): DeviceAdapter[] {
+export function buildAdapters(
+  sdmAccessToken?: string,
+  userSettings?: UserSettings | null
+): DeviceAdapter[] {
   const adapters: DeviceAdapter[] = [];
 
-  // SDM (requires user's OAuth token)
-  if (sdmAccessToken && process.env.SDM_PROJECT_ID) {
+  // SDM — requires user's OAuth token + project ID
+  const sdmProjectId =
+    userSettings?.sdmProjectId || process.env.SDM_PROJECT_ID;
+  const sdmEnabled = userSettings?.sdmEnabled ?? !!process.env.SDM_PROJECT_ID;
+  if (sdmAccessToken && sdmProjectId && sdmEnabled) {
     try {
-      adapters.push(new SDMAdapter(sdmAccessToken));
+      adapters.push(new SDMAdapter(sdmAccessToken, sdmProjectId));
     } catch (e) {
       console.error("Failed to init SDM adapter:", e);
     }
   }
 
-  // Schlage (server credentials)
-  if (process.env.SCHLAGE_USERNAME && process.env.SCHLAGE_PASSWORD) {
+  // Schlage
+  const schlageUser =
+    userSettings?.schlageUsername || process.env.SCHLAGE_USERNAME;
+  const schlagePass =
+    userSettings?.schlagePassword || process.env.SCHLAGE_PASSWORD;
+  const schlageEnabled =
+    userSettings?.schlageEnabled ??
+    !!(process.env.SCHLAGE_USERNAME && process.env.SCHLAGE_PASSWORD);
+  if (schlageUser && schlagePass && schlageEnabled) {
     try {
-      adapters.push(new SchlageAdapter());
+      adapters.push(new SchlageAdapter(schlageUser, schlagePass));
     } catch (e) {
       console.error("Failed to init Schlage adapter:", e);
     }
   }
 
-  // Kasa (server credentials)
-  if (process.env.KASA_USERNAME && process.env.KASA_PASSWORD) {
+  // Kasa
+  const kasaUser = userSettings?.kasaUsername || process.env.KASA_USERNAME;
+  const kasaPass = userSettings?.kasaPassword || process.env.KASA_PASSWORD;
+  const kasaEnabled =
+    userSettings?.kasaEnabled ??
+    !!(process.env.KASA_USERNAME && process.env.KASA_PASSWORD);
+  if (kasaUser && kasaPass && kasaEnabled) {
     try {
-      adapters.push(new KasaAdapter());
+      adapters.push(new KasaAdapter(kasaUser, kasaPass));
     } catch (e) {
       console.error("Failed to init Kasa adapter:", e);
     }
